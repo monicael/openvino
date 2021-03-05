@@ -115,6 +115,9 @@ PassSet::Ptr PassManager::buildMiddleEnd() {
     // (do this before `analyzeWeightableLayers`)
     //
 
+    ADD_PASS(splitGroupConv3D);
+    ADD_DUMP_PASS("splitGroupConv3D");
+
     ADD_PASS(splitConv3DInto2D);
     ADD_DUMP_PASS("splitConv3DInto2D");
 

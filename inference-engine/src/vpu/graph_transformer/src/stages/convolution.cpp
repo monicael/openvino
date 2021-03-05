@@ -377,7 +377,7 @@ void parseConvND(const Model      & model,
     VPU_THROW_UNLESS(output_channels > 0, "invalid number of output channels: %d", output_channels);
 
     int groups = convLayer->_group;
-    VPU_THROW_UNLESS(groups == 1, "number of groups=%d, but grouped 3D convolution is not supported", groups);
+    // VPU_THROW_UNLESS(groups == 1, "number of groups=%d, but grouped 3D convolution is not supported", groups);
 
     int inputNDims = input->desc().numDims();
     int outputNDims = output->desc().numDims();
@@ -401,10 +401,10 @@ void parseConvND(const Model      & model,
     VPU_THROW_UNLESS(output_channels % groups == 0,
                      "number of groups must divide the number of output channels, but: channels=%d, groups=%d",
                      output_channels, groups);
-    VPU_THROW_UNLESS(output_channels / groups == biases->desc().dim(Dim::C),
+    VPU_THROW_UNLESS(output_channels == biases->desc().dim(Dim::C),
                      "number of biases must equal to number of output channels per group, but: "
                      "channels per group=%d, biases=%d",
-                     output_channels / groups, biases->desc().dim(Dim::C));
+                     output_channels, biases->desc().dim(Dim::C));
 
     // Checking spacial dimensions of output...
     // NB: Note, that input/output shape arrays
@@ -445,23 +445,29 @@ void parseConvND(const Model      & model,
     int weightsTotalElems = kernelTotalElems *
                             (input_channels / groups) *
                             (output_channels / groups);
-    VPU_THROW_UNLESS(weights->desc().totalDimSize() == weightsTotalElems,
+    VPU_THROW_UNLESS(weights->desc().totalDimSize() == weightsTotalElems * groups,
                      "failed check of weights size: actual=%d, expected=%d",
-                     weights->desc().totalDimSize(), weightsTotalElems);
+                     weights->desc().totalDimSize(), weightsTotalElems * groups);
 
     std::vector<int> weightsShape(kernelNDims + 2);
     for (int i = 0; i < kernelNDims; i++) {
         weightsShape[i] = kernelShape[i];
     }
-    weightsShape[kernelNDims + 0] =  input_channels / groups;
+    weightsShape[kernelNDims + 0] = input_channels / groups;
     weightsShape[kernelNDims + 1] = output_channels / groups;
+
+    if (groups != 1) {
+        weightsShape.push_back(groups);
+        std::swap(weightsShape[kernelNDims - 1], weightsShape[kernelNDims]);
+        std::swap(weightsShape[kernelNDims], weightsShape[kernelNDims + 1]);
+    }
 
     DataDesc weightsDesc(weightsShape);
     auto weightsReshaped = model->duplicateData(weights, "@conv3d", weightsDesc);
 
-    VPU_THROW_UNLESS(biases->desc().totalDimSize() == output_channels / groups,
+    VPU_THROW_UNLESS(biases->desc().totalDimSize() == output_channels,
                      "failed check of biases size: actual=%d, expected=%d",
-                     biases->desc().totalDimSize(), output_channels / groups);
+                     biases->desc().totalDimSize(), output_channels);
 
     //
     // Check if HW is applicable
@@ -530,6 +536,33 @@ Stage StageBuilder::addConvolutionStage(
         layer,
         {input, weights, biases, scales},
         {output});
+    return stage;
+}
+
+Stage StageBuilder::addConvNDStage(
+        const Model& model,
+        const std::string& name,
+        const ie::CNNLayerPtr& layer,
+        const Data& input,
+        const Data& output,
+        const Data& weights,
+        const Data& biases) {
+    //
+    // Check parameters: only 3D convolution supported (yet)
+    //
+    VPU_THROW_UNLESS(input->desc().dimsOrder() == DimsOrder::NCDHW, "unsupported dims order");
+    VPU_THROW_UNLESS(output->desc().dimsOrder() == DimsOrder::NCDHW, "unsupported dims order");
+
+    //
+    // Add ND convolution stage
+    //
+    auto stage = model->addNewStage<ConvNDStage>(
+        layer->name,
+        StageType::ConvND,
+        layer,
+        {input, weights, biases},
+        {output});
+    
     return stage;
 }
 
