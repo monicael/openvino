@@ -257,6 +257,15 @@ public:
             const Data& biases,
             const Data& scales);
 
+    Stage addConvNDStage(
+        const Model& model,
+        const std::string& name,
+        const ie::CNNLayerPtr& layer,
+        const Data& input,
+        const Data& output,
+        const Data& weights,
+        const Data& biases);
+
     Stage addReduceStage(
             const Model& model,
             const std::string& name,

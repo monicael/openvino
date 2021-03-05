@@ -98,6 +98,7 @@ public:
     Pass::Ptr splitConv3DInto2D();
     Pass::Ptr splitPool3DInto2D();
     Pass::Ptr eliminateRedundantConversions();
+    Pass::Ptr splitGroupConv3D();
 
     //
     // Model HW-specific optimizations
