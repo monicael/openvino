@@ -456,6 +456,9 @@ void parseConvND(const Model      & model,
     weightsShape[kernelNDims + 0] = input_channels / groups;
     weightsShape[kernelNDims + 1] = output_channels / groups;
 
+    // For 5D weights the layout is NCDHW, with N = outCh, C = inCh, D = depth, H = height, W = width
+    // However, 6D weights get layout (extra_dim)DNCHW and the inCh, outCh and depth dims are switched
+    // TODO: find a cleaner way to solve this.
     if (groups != 1) {
         weightsShape.push_back(groups);
         std::swap(weightsShape[kernelNDims - 1], weightsShape[kernelNDims]);
