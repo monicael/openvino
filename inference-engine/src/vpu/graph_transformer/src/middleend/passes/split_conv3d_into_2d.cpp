@@ -167,13 +167,16 @@ void PassImpl::run(const Model& model) {
         model->disconnectStage(stage);
 
         // output = bias + preBiased
-        Data preBiased = model->duplicateData(output, "@pre_biased", outputDesc);
-        _stageBuilder->addBiasStage(model,
-                                    stage->name() + "@bias",
-                                    stage->origLayer(),
-                                    preBiased,
-                                    biases,
-                                    output);
+        Data preBiased = output;
+        if (biases->usage() != DataUsage::Fake) {
+            preBiased = model->duplicateData(output, "@pre_biased", outputDesc);
+            _stageBuilder->addBiasStage(model,
+                                        stage->name() + "@bias",
+                                        stage->origLayer(),
+                                        preBiased,
+                                        biases,
+                                        output);
+        }
 
         // preBiased = merge{subOutputs[d], d=0,...,D-1} -- was split by `depth` axis
         DataVector subOutputs3D(OD);
