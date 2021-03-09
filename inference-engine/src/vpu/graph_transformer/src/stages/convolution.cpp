@@ -381,7 +381,6 @@ void parseConvND(const Model      & model,
 
     int inputNDims = input->desc().numDims();
     int outputNDims = output->desc().numDims();
-    int biasesNDims = biases->desc().numDims();
 
     VPU_THROW_UNLESS(inputNDims == outputNDims,
                      "number of dims must equal: input ndims=%d, output ndims=%d",
@@ -389,7 +388,6 @@ void parseConvND(const Model      & model,
     VPU_THROW_UNLESS(inputNDims == kernelNDims + 2,
                      "input must have 2 additional dims (for batch and channels), but: input ndims=%d, kernel ndims=%d",
                      inputNDims, kernelNDims);
-    VPU_THROW_UNLESS(biasesNDims == 1, "biases must come as 1D array, but: biases ndims=%d", biasesNDims);
 
     int input_channels = input->desc().dim(Dim::C);
     VPU_THROW_UNLESS(output_channels == output->desc().dim(Dim::C),
@@ -401,10 +399,6 @@ void parseConvND(const Model      & model,
     VPU_THROW_UNLESS(output_channels % groups == 0,
                      "number of groups must divide the number of output channels, but: channels=%d, groups=%d",
                      output_channels, groups);
-    VPU_THROW_UNLESS(output_channels == biases->desc().dim(Dim::C),
-                     "number of biases must equal to number of output channels per group, but: "
-                     "channels per group=%d, biases=%d",
-                     output_channels, biases->desc().dim(Dim::C));
 
     // Checking spacial dimensions of output...
     // NB: Note, that input/output shape arrays
@@ -431,7 +425,6 @@ void parseConvND(const Model      & model,
     VPU_THROW_UNLESS(input->desc().type() == DataType::FP16, "unsupported data type: %d", input->desc().type());
     VPU_THROW_UNLESS(output->desc().type() == DataType::FP16, "unsupported data type: %d", output->desc().type());
     VPU_THROW_UNLESS(weights->desc().type() == DataType::FP16, "unsupported data type: %d", weights->desc().type());
-    VPU_THROW_UNLESS(biases->desc().type() == DataType::FP16, "unsupported data type: %d", biases->desc().type());
 
     //
     // Reshape weights, check biases
@@ -468,9 +461,20 @@ void parseConvND(const Model      & model,
     DataDesc weightsDesc(weightsShape);
     auto weightsReshaped = model->duplicateData(weights, "@conv3d", weightsDesc);
 
-    VPU_THROW_UNLESS(biases->desc().totalDimSize() == output_channels,
-                     "failed check of biases size: actual=%d, expected=%d",
-                     biases->desc().totalDimSize(), output_channels);
+    if (biases->usage() != DataUsage::Fake) {
+        const int biasesNDims = biases->desc().numDims();
+
+        VPU_THROW_UNLESS(biasesNDims == 1, "biases must come as 1D array, but: biases ndims=%d", biasesNDims);
+        VPU_THROW_UNLESS(output_channels == biases->desc().dim(Dim::C),
+                     "number of biases must equal to number of output channels per group, but: "
+                     "channels per group=%d, biases=%d",
+                     output_channels, biases->desc().dim(Dim::C));
+
+        VPU_THROW_UNLESS(biases->desc().type() == DataType::FP16, "unsupported data type: %d", biases->desc().type());
+        VPU_THROW_UNLESS(biases->desc().totalDimSize() == output_channels,
+                    "failed check of biases size: actual=%d, expected=%d",
+                    biases->desc().totalDimSize(), output_channels);
+    }
 
     //
     // Check if HW is applicable

@@ -35,8 +35,9 @@ vpu::Data createSubWeights(
 
     auto subWeightsPtr = subWeightsBlob->buffer().as<fp16_t*>();
 
-    const auto volumeBytes = static_cast<size_t >(KW * KH * KD * KI * KO * sizeof(fp16_t));
-    ie_memcpy(subWeightsPtr, volumeBytes, weightsPtr + group * volumeBytes, volumeBytes);
+    const auto volumeElements = static_cast<size_t>(KW * KH * KD * KI * KO);
+    const auto volumeBytes = volumeElements * sizeof(fp16_t);
+    ie_memcpy(subWeightsPtr, volumeBytes, weightsPtr + group * volumeElements, volumeBytes);
 
     auto subWeights = model->duplicateData(weights, postfix,
                                            DataDesc(subWeightsDims),
@@ -153,20 +154,26 @@ void PassImpl::run(const Model& model) {
             subOutputs3D[idxG] = model->duplicateData(output, postfix, subOutputsDesc3D);
 
             // Split biases
-            const auto biasContent = biases->content();
-            auto biasPtr = biasContent->get<fp16_t>();
-            const auto biasPerGroupSz = static_cast<size_t>(outChPerGroup * sizeof(fp16_t));
 
-            const ie::TensorDesc subBiasDesc(ie::Precision::FP16, {static_cast<size_t>(outChPerGroup)}, ie::Layout::C);
-            auto subBiasBlob = ie::make_shared_blob<fp16_t>(subBiasDesc);
-            subBiasBlob->allocate();
-            auto subBiasPtr = subBiasBlob->buffer().as<fp16_t*>();
+            auto subBias = model->addFakeData();
+            if (biases->usage() != DataUsage::Fake) {
+                const auto biasContent = biases->content();
+                VPU_THROW_UNLESS(biasContent != nullptr, "bias content empty: ", stage->name());
 
-            ie_memcpy(subBiasPtr, biasPerGroupSz, biasPtr + idxG * biasPerGroupSz, biasPerGroupSz);
+                auto biasPtr = biasContent->get<fp16_t>();
+                const auto biasPerGroupSz = static_cast<size_t>(outChPerGroup * sizeof(fp16_t));
 
-            auto subBias = model->duplicateData(biases, postfix,
-                                                DataDesc({static_cast<size_t>(outChPerGroup)}),
-                                                ieBlobContent(subBiasBlob));
+                const ie::TensorDesc subBiasDesc(ie::Precision::FP16, {static_cast<size_t>(outChPerGroup)}, ie::Layout::C);
+                auto subBiasBlob = ie::make_shared_blob<fp16_t>(subBiasDesc);
+                subBiasBlob->allocate();
+                auto subBiasPtr = subBiasBlob->buffer().as<fp16_t*>();
+
+                ie_memcpy(subBiasPtr, biasPerGroupSz, biasPtr + idxG * outChPerGroup, biasPerGroupSz);
+
+                subBias = model->duplicateData(biases, postfix,
+                                               DataDesc({static_cast<size_t>(outChPerGroup)}),
+                                               ieBlobContent(subBiasBlob));
+            }
 
             // Split weights
             auto subWeights = createSubWeights(model, weights, idxG, postfix);
