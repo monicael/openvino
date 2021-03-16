@@ -46,6 +46,46 @@ vpu::Data createSubWeights(
     return subWeights;
 }
 
+vpu::Data createUnGroupedWeights(
+    const Model& model, const vpu::Data& weights, const int groups, const std::string& postfix) {
+
+    const auto weightsContent = weights->content();
+    VPU_THROW_UNLESS(weightsContent != nullptr, "need weights content");
+
+    const auto weightsDesc = weights->desc();
+    const int KW = weightsDesc.dim(Dim::W);
+    const int KH = weightsDesc.dim(Dim::H);
+    const int KD = weightsDesc.dim(Dim::D);
+    const int KI = weightsDesc.dim(Dim::C);
+    const int KO = weightsDesc.dim(Dim::N);
+
+    auto weightsPtr = weightsContent->get<fp16_t>();
+    VPU_THROW_UNLESS(weightsPtr != nullptr, "cannot get weights data");
+
+    const ie::SizeVector subWeightsDims = {
+        static_cast<size_t>(KW), static_cast<size_t>(KH), static_cast<size_t>(KD),
+        static_cast<size_t>(KI) * groups, static_cast<size_t>(KO) * groups};
+    const ie::TensorDesc subWeightsDesc(ie::Precision::FP16, subWeightsDims, ie::Layout::NCDHW);
+    auto subWeightsBlob = ie::make_shared_blob<fp16_t>(subWeightsDesc);
+    subWeightsBlob->allocate();
+
+    auto subWeightsPtr = subWeightsBlob->buffer().as<fp16_t*>();
+    std::memset(subWeightsPtr, 0, subWeightsBlob->byteSize());
+
+    for (int gr = 0; gr < groups; ++gr) {
+        const auto volumeElements = static_cast<size_t>(KW * KH * KD * KI * KO);
+        const auto newVolumeElements = static_cast<size_t>(KW * KH * KD * KI * groups);
+        const auto volumeBytes = volumeElements * sizeof(fp16_t);
+        ie_memcpy(subWeightsPtr + gr * (volumeElements + newVolumeElements), volumeBytes, weightsPtr + gr * volumeElements, volumeBytes);
+    }
+
+    auto subWeights = model->duplicateData(weights, postfix,
+                                           DataDesc(subWeightsDims),
+                                           ieBlobContent(subWeightsBlob));
+
+    return subWeights;
+}
+
 class PassImpl final : public Pass {
 public:
     explicit PassImpl(const StageBuilder::Ptr& stageBuilder) : _stageBuilder(stageBuilder) {}
@@ -121,6 +161,10 @@ void PassImpl::run(const Model& model) {
         const int OH = outputDesc.dim(Dim::H);
         const int OW = outputDesc.dim(Dim::W);
 
+
+        const int KI = weights->desc().dim(Dim::C);
+        const int KO = weights->desc().dim(Dim::N);
+
         DataDesc weightsDesc = weights->desc();
         VPU_THROW_UNLESS(weightsDesc.type() == DataType::FP16, "wrong weights type: %d", weightsDesc.type());
 
@@ -131,6 +175,32 @@ void PassImpl::run(const Model& model) {
         DataVector subOutputs3D(groups);
         const int inChPerGroup = IC / groups;
         const int outChPerGroup = OC / groups;
+
+        // Optimization for input & output channels per group equal to 1
+        if (KI == 1 && KO == 1) {
+            auto newWeights = createUnGroupedWeights(model, weights, groups, "@group-conv3d");
+            Stage conv3d = _stageBuilder->addConvNDStage(
+                model,
+                stage->name() + "@group-conv3d",
+                stage->origLayer(),
+                input,
+                output,
+                newWeights,
+                biases);
+
+            conv3d->attrs().set("pads_begin", pads_begin);
+            conv3d->attrs().set("pads_end",   pads_end);
+
+            conv3d->attrs().set("strides",    strides);
+            conv3d->attrs().set("dilations",  dilations);
+
+            conv3d->attrs().set("groups",     1);
+
+            conv3d->attrs().set("try_hw",     try_hw);
+
+            model->removeStage(stage);
+            continue;
+        }
 
         for (int g = 0; g < groups; ++g) {
             const auto postfix = formatString("@group-conv3d(g=%d/%d)", g + 1, groups);
